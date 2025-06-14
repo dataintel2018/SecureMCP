@@ -1,0 +1,29 @@
+# Core FastAPI dependencies
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.6.0
+pydantic-settings>=2.1.0
+starlette>=0.36.0
+
+# HTTP client for API calls
+httpx>=0.26.0
+
+# CLI interface
+click>=8.1.7
+
+# Type hints support
+typing-extensions>=4.9.0
+
+# For serving static files (if needed)
+python-multipart>=0.0.9
+
+# For environment variables
+python-dotenv>=1.0.0
+
+mcp
+fastmcp
+python-jose[cryptography]==3.3.0
+requests 
+
+pytest==8.0.0
+pytest-asyncio==0.23.5 
