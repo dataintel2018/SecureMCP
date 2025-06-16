@@ -5,23 +5,46 @@ from fastapi.responses import JSONResponse, RedirectResponse
 import uvicorn
 from pydantic import BaseModel
 import secrets
-from typing import Optional
+from typing import Optional, List, Dict
 import time
 import logging
+import json
+import os
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Store client credentials
-clients = {
-    "default_client": {
-        "client_id": "local_client_id",
-        "client_secret": "local_client_secret",
-        "redirect_uris": ["http://localhost:8000/local/callback"]  # Only server-side callback
-        #"redirect_uris": ["http://localhost:3000/callback"]
-    }
-}
+CLIENTS_FILE = "clients.json"
+
+class ClientData(BaseModel):
+    client_name: str
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    redirect_uris: List[str]
+
+def load_clients() -> Dict:
+    """Load clients from JSON file."""
+    if os.path.exists(CLIENTS_FILE):
+        try:
+            with open(CLIENTS_FILE, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            logger.error(f"Error reading {CLIENTS_FILE}, starting with empty clients")
+            return {}
+    return {}
+
+def save_clients(clients_data: Dict):
+    """Save clients to JSON file."""
+    try:
+        with open(CLIENTS_FILE, 'w') as f:
+            json.dump(clients_data, f, indent=2)
+        logger.info(f"Successfully saved clients to {CLIENTS_FILE}")
+    except Exception as e:
+        logger.error(f"Error saving clients to {CLIENTS_FILE}: {str(e)}")
+
+# Initialize clients from file
+clients = load_clients()
 
 # Store authorization codes and tokens
 auth_codes = {}
@@ -194,6 +217,60 @@ async def userinfo(request: Request):
         "name": "Local User",
         "email": "user@local.test"
     }
+
+@app.post("/admin/clients/{client_name}")
+async def add_client(client_name: str, client_data: ClientData):
+    """Add a new client. If client_id and client_secret are not provided, they will be generated automatically."""
+    # Generate client_id and client_secret if not provided
+    if not client_data.client_id:
+        client_data.client_id = f"client_{secrets.token_urlsafe(16)}"
+    if not client_data.client_secret:
+        client_data.client_secret = secrets.token_urlsafe(32)
+    if not client_data.redirect_uris:
+        client_data.redirect_uris = client_data.redirect_uris
+    
+    #client_name = f"client_{len(clients)}"
+    clients[client_name] = client_data.model_dump()
+    
+    # Save to file
+    save_clients(clients)
+    
+    logger.info(f"Added new client: {client_name}")
+    return {
+        "message": "Client added successfully",
+        "client_name": client_name,
+        "client_id": client_data.client_id,
+        "client_secret": client_data.client_secret,
+        "redirect_uris": client_data.redirect_uris
+    }
+
+@app.put("/admin/clients/{client_name}")
+async def update_client(client_name: str, client_data: ClientData):
+    """Update an existing client."""
+    if client_name not in clients:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    clients[client_name] = client_data.dict()
+    
+    # Save to file
+    save_clients(clients)
+    
+    logger.info(f"Updated client: {client_name}")
+    return {"message": "Client updated successfully"}
+
+@app.delete("/admin/clients/{client_name}")
+async def delete_client(client_name: str):
+    """Delete a client."""
+    if client_name not in clients:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    del clients[client_name]
+    
+    # Save to file
+    save_clients(clients)
+    
+    logger.info(f"Deleted client: {client_name}")
+    return {"message": "Client deleted successfully"}
 
 if __name__ == "__main__":
     # Set up logging

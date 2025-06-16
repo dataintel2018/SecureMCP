@@ -3,7 +3,9 @@
 import logging
 import secrets
 import time
-from typing import Any, Literal
+from typing import Any, Literal, Optional
+import requests
+import json
 
 import click
 from pydantic import AnyHttpUrl
@@ -33,18 +35,17 @@ logger = logging.getLogger(__name__)
 
 class ServerSettings(BaseSettings):
     """Settings for the simple Local OAuth MCP server."""
-
     model_config = SettingsConfigDict(env_prefix="MCP_LOCAL_")
 
     # Server settings
     host: str = "localhost"
-    port: int = 8000
-    server_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
+    port: int
+    server_url: Optional[AnyHttpUrl] = AnyHttpUrl("http://localhost:8000")
 
     # Local OAuth settings
     oauth_server_url: str = "http://localhost:9000"
-    client_id: str = "local_client_id"
-    client_secret: str = "local_client_secret"
+    client_id: Optional[str] = None# = "local_client_id"
+    client_secret: Optional[str] = None #= "local_client_secret"
     callback_path: str = "local/callback"  # MCP server callback
 
     # OAuth endpoints
@@ -403,15 +404,18 @@ def create_simple_mcp_server(settings: ServerSettings) -> FastMCP:
 
 
 @click.command()
+@click.option("--name", help="Name of the server")
 @click.option("--port", default=8000, help="Port to listen on")
-@click.option("--host", default="localhost", help="Host to bind to")
+@click.option("--transport", default="streamable-http", help="Transport protocol to use ('sse' or 'streamable-http')")
+@click.option("--client_id", default="local_client_id", help="Client ID")
+@click.option("--client_secret", default="local_client_secret", help="Client Secret")
 @click.option(
     "--transport",
     default="sse",
     type=click.Choice(["sse", "streamable-http"]),
     help="Transport protocol to use ('sse' or 'streamable-http')",
 )
-def main(port: int, host: str, transport: Literal["sse", "streamable-http"]) -> int:
+def main(name: str, port: int, transport: Literal["sse", "streamable-http"], client_id: str, client_secret: str) -> int:
     """Run the simple Local OAuth MCP server."""
     # Set up more detailed logging
     logging.basicConfig(
@@ -420,11 +424,27 @@ def main(port: int, host: str, transport: Literal["sse", "streamable-http"]) -> 
     )
 
     try:
-        settings = ServerSettings(host=host, port=port)
-        logger.info(f"Server settings loaded: {settings.dict()}")
+        settings = ServerSettings(port=port)
+        settings.server_url = AnyHttpUrl(f"http://localhost:{port}")
+        logger.info(f"Server settings loaded: {settings.__dict__}")
+
+        client_data = {
+            "client_name": name, #"local_client_id2",
+            "redirect_uris": [str(settings.server_url) + settings.callback_path]
+        }
+
+
+        response = requests.post(f"{settings.oauth_server_url}/admin/clients/{client_data['client_name']}", json=client_data)
+        assert response.status_code == 200, f"Failed to add client: {response.text}"
+        client_info = response.json()
+        logger.info(f"Added new client: {json.dumps(client_info, indent=2)}")
+
     except ValueError as e:
         logger.error(f"Failed to load settings: {e}")
         return 1
+
+    settings.client_id = client_info["client_id"]
+    settings.client_secret = client_info["client_secret"]
 
     mcp_server = create_simple_mcp_server(settings)
     logger.info(f"Starting server with {transport} transport")
