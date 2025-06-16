@@ -74,7 +74,9 @@ class SimpleLocalOAuthProvider(OAuthAuthorizationServerProvider):
     async def register_client(self, client_info: OAuthClientInformationFull):
         """Register a new OAuth client."""
         print("Mahesh:Registering client")
+        print(f"Mahesh:Client info: {client_info}")
         self.clients[client_info.client_id] = client_info
+        print(f"Mahesh: self.clients: {self.clients}")
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
         """Generate an authorization URL for Local OAuth flow."""

@@ -178,7 +178,7 @@ class SimpleAuthClient:
                 raise RuntimeError("Client-side callback handler should never be called in server-mediated OAuth flow.")
 
             client_metadata_dict = {
-                "client_name": "Simple Auth Client 1",
+                "client_name": "Simple Auth Client 2",
                 "redirect_uris": ["http://localhost:3000/callback"],
                 #"redirect_uris": ["http://localhost:8000/local/callback"],
                 "grant_types": ["authorization_code", "refresh_token"],
