@@ -1,0 +1,82 @@
+@startuml
+!theme plain
+skinparam backgroundColor white
+skinparam sequenceArrowThickness 2
+skinparam roundcorner 20
+skinparam maxmessagesize 60
+
+participant "MCP Client" as Client
+participant "Local Callback Server\n(port 3000)" as CallbackServer
+participant "User Browser" as Browser
+participant "MCP Server\n(port 8000)" as MCPServer
+participant "Local OAuth Server\n(port 9000)" as OAuthServer
+
+note over Client, OAuthServer #lightblue
+    **Initial Setup Phase**
+end note
+
+Client -> MCPServer: Start connection with OAuth
+MCPServer -> OAuthServer: POST /admin/clients/{client_name}\nRegister client
+OAuthServer --> MCPServer: Return client_id & client_secret
+
+note over Client, OAuthServer #lightgreen
+    **OAuth Authorization Flow Begins**
+end note
+
+Client -> CallbackServer: Start callback server (port 3000)
+MCPServer -> MCPServer: Generate state parameter
+MCPServer -> Client: Return authorization URL
+Client -> Browser: Open authorization URL in browser
+
+Browser -> OAuthServer: GET /oauth/authorize\n?client_id=...&redirect_uri=.../local/callback&state=...
+OAuthServer -> OAuthServer: Validate client_id and redirect_uri
+OAuthServer -> OAuthServer: Generate authorization code
+OAuthServer --> Browser: Redirect to MCP Server callback\nwith auth code and state
+
+note over Browser, MCPServer #lightyellow
+    **OAuth Server Callback Handler**
+end note
+
+Browser -> MCPServer: GET /local/callback?code=...&state=...
+MCPServer -> MCPServer: Validate state parameter
+MCPServer -> OAuthServer: POST /oauth/token\nExchange auth code for access token
+OAuthServer -> OAuthServer: Validate auth code and client credentials
+OAuthServer --> MCPServer: Return access token
+MCPServer -> MCPServer: Generate MCP authorization code
+MCPServer --> Browser: Redirect to /client/callback\nwith MCP code
+
+note over Browser, Client #lightcyan
+    **Client Callback Handler**
+end note
+
+Browser -> MCPServer: GET /client/callback?code=...&state=...
+MCPServer -> MCPServer: Retrieve original redirect_uri from state
+MCPServer --> Browser: Redirect to client callback\n(localhost:3000/callback)
+
+Browser -> CallbackServer: GET /callback?code=...&state=...
+CallbackServer -> CallbackServer: Store authorization code
+CallbackServer --> Browser: Success page
+CallbackServer -> Client: Return authorization code
+Client -> Client: Stop callback server
+
+note over Client, MCPServer #lightpink
+    **Token Exchange Phase**
+end note
+
+Client -> MCPServer: POST /oauth/token\nExchange MCP code for MCP token
+MCPServer -> MCPServer: Validate MCP authorization code
+MCPServer -> MCPServer: Generate MCP access token
+MCPServer --> Client: Return MCP access token
+
+note over Client, OAuthServer #lavender
+    **Authenticated API Calls**
+end note
+
+Client -> MCPServer: Call authenticated tool (get_user_profile)
+MCPServer -> MCPServer: Get local OAuth token from mapping
+MCPServer -> OAuthServer: GET /userinfo\nBearer {local_token}
+OAuthServer -> OAuthServer: Validate access token
+OAuthServer --> MCPServer: Return user profile
+MCPServer --> Client: Return user profile data
+
+@enduml
