@@ -4,6 +4,7 @@ import logging
 import secrets
 import time
 from typing import Any, Literal
+import requests
 
 import click
 from pydantic import AnyHttpUrl
@@ -69,12 +70,26 @@ class SimpleLocalOAuthProvider(OAuthAuthorizationServerProvider):
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         """Get OAuth client information."""
+        print(f"Mahesh:get_client: {client_id}")
         return self.clients.get(client_id)
 
     async def register_client(self, client_info: OAuthClientInformationFull):
         """Register a new OAuth client."""
         print("Mahesh:Registering client")
-        self.clients[client_info.client_id] = client_info
+        print(f"client_info: {client_info.model_dump()}")
+        print(f"client_info_json: {client_info.model_dump_json()}")
+        clientRegisterInfo = {
+            "client_id": client_info.client_id,
+            "client_secret": client_info.client_secret,
+            "client_id_issued_at": client_info.client_id_issued_at,
+            "client_name": client_info.client_name,
+            "client_secret_expires_at": client_info.client_secret_expires_at,
+        }
+        response = requests.post(f"http://localhost:9000/oauth/register", data=client_info.model_dump_json())
+        if response.status_code != 200:
+            raise HTTPException(400, "Failed to register client")
+        else:
+            self.clients[client_info.client_id] = client_info
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
         """Generate an authorization URL for Local OAuth flow."""
@@ -86,6 +101,8 @@ class SimpleLocalOAuthProvider(OAuthAuthorizationServerProvider):
         logger.info(f"Code Challenge: {params.code_challenge}")
         logger.info(f"Client ID: {client.client_id}")
         logger.info(f"Settings call back url: {self.settings.server_url}{self.settings.callback_path}")
+        logger.info(f"client metadata: {client.model_dump()}")
+        logger.info(f"params: {params.model_dump()}")
         
         # Store the state mapping
         self.state_mapping[state] = {
@@ -93,6 +110,7 @@ class SimpleLocalOAuthProvider(OAuthAuthorizationServerProvider):
             "code_challenge": params.code_challenge,
             "redirect_uri_provided_explicitly": str(params.redirect_uri_provided_explicitly),
             "client_id": client.client_id,
+            #"code_verifier": params.code_verifier  # Store the code verifier
         }
 
         logger.info(f"Current state mapping: {self.state_mapping}")
@@ -106,8 +124,11 @@ class SimpleLocalOAuthProvider(OAuthAuthorizationServerProvider):
         # Build authorization URL
         auth_url = (
             f"{self.settings.auth_url}"
-            f"?client_id={self.settings.client_id}"
+            #f"?client_id={self.settings.client_id}"
+            f"?client_id={client.client_id}"
             f"&redirect_uri={callback_url}"
+            f"&code_challenge={params.code_challenge}"
+            f"&code_challenge_method=S256"            
             f"&scope={self.settings.mcp_scope}"
             f"&state={state}"
         )
@@ -137,6 +158,11 @@ class SimpleLocalOAuthProvider(OAuthAuthorizationServerProvider):
         code_challenge = state_data["code_challenge"]
         redirect_uri_provided_explicitly = state_data["redirect_uri_provided_explicitly"] == "True"
         client_id = state_data["client_id"]
+        code_verifier = state_data.get("code_verifier")  # Get the code verifier from state data
+
+        # if not code_verifier:
+        #     logger.error("No code verifier found in state data")
+        #     raise HTTPException(400, "Missing code verifier")
 
         # Exchange code for token with local OAuth server
         async with create_mcp_http_client() as client:
@@ -147,6 +173,7 @@ class SimpleLocalOAuthProvider(OAuthAuthorizationServerProvider):
                 "code": code,
                 "redirect_uri": f"{self.settings.server_url}{self.settings.callback_path}",
                 #"redirect_uri": state_data["redirect_uri"],
+                #"code_verifier": code_verifier  # Add the code verifier to the request
             }
             logger.info(f"Token request data: {token_request}")
             
@@ -200,6 +227,32 @@ class SimpleLocalOAuthProvider(OAuthAuthorizationServerProvider):
     async def exchange_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: AuthorizationCode
     ) -> OAuthToken:
+#===============Claude Recommendation===============
+        # """Exchange auth code directly with OAuth server."""
+        # async with create_mcp_http_client() as http_client:
+        #     response = await http_client.post(
+        #         self.settings.token_url,
+        #         json={
+        #             "grant_type": "authorization_code",
+        #             "client_id": client.client_id,
+        #             "client_secret": client.client_secret,
+        #             "code": authorization_code.code,
+        #             "redirect_uri": str(authorization_code.redirect_uri),
+        #             "code_verifier": authorization_code.code_verifier  # Add PKCE verifier
+        #         }
+        #     )
+            
+        #     if response.status_code != 200:
+        #         raise ValueError("Token exchange failed")
+                
+        #     data = response.json()
+        #     return OAuthToken(
+        #         access_token=data["access_token"],
+        #         token_type="Bearer",
+        #         expires_in=data.get("expires_in", 3600),
+        #         scope=data.get("scope", "")
+        #     )
+#===============Claude Recommendation===============
         """Exchange authorization code for tokens."""
         logger.info(f"Exchanging authorization code: {authorization_code.code}")
         logger.info(f"Auth codes: {self.auth_codes}")
@@ -295,6 +348,24 @@ def create_simple_mcp_server(settings: ServerSettings) -> FastMCP:
         debug=True,
         auth=auth_settings,
     )
+
+    #================= The following end point is not supported by the MCP Framework ===========================
+    # @app.custom_route("/.well-known/oauth-authorization-server-01", methods=["GET"])
+    # async def oauth_metadata():
+    #     """OAuth Authorization Server Metadata (RFC 8414)."""
+    #     print(f"Mahesh:oauth_metadata")
+    #     return {
+    #         "issuer": "http://localhost:9000",
+    #         "authorization_endpoint": "http://localhost:9000/oauth/authorize",
+    #         "token_endpoint": "http://localhost:9000/oauth/token",
+    #         "registration_endpoint": "http://localhost:9000/oauth/register",
+    #         "userinfo_endpoint": "http://localhost:9000/userinfo",
+    #         "response_types_supported": ["code"],
+    #         "grant_types_supported": ["authorization_code"],
+    #         "code_challenge_methods_supported": ["S256"],
+    #         "token_endpoint_auth_methods_supported": ["client_secret_post"],
+    #         "scopes_supported": ["user", "profile"]
+    #     }
 
     @app.custom_route("/local/callback", methods=["GET"])
     async def oauth_callback_handler(request: Request) -> Response:

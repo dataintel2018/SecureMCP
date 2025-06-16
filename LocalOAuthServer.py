@@ -8,6 +8,9 @@ import secrets
 from typing import Optional
 import time
 import logging
+import base64
+import hashlib
+from mcp.shared.auth import OAuthClientInformationFull
 
 logger = logging.getLogger(__name__)
 
@@ -15,17 +18,63 @@ app = FastAPI()
 
 # Store client credentials
 clients = {
-    "default_client": {
-        "client_id": "local_client_id",
-        "client_secret": "local_client_secret",
-        "redirect_uris": ["http://localhost:8000/local/callback"]  # Only server-side callback
-        #"redirect_uris": ["http://localhost:3000/callback"]
-    }
+    # "default_client": {
+    #     "client_id": "local_client_id",
+    #     "client_secret": "local_client_secret",
+    #     "redirect_uris": ["http://localhost:8000/local/callback"]  # Only server-side callback
+    #     #"redirect_uris": ["http://localhost:3000/callback"]
+    # }
 }
 
 # Store authorization codes and tokens
 auth_codes = {}
 access_tokens = {}
+
+# from pydantic import BaseModel
+
+# class ClientRegistrationRequest(BaseModel):
+#     client_name: str
+#     redirect_uris: list[str]
+#     grant_types: list[str] = ["authorization_code"]
+#     response_types: list[str] = ["code"]
+#     token_endpoint_auth_method: str = "client_secret_post"
+
+
+@app.post("/oauth/register")
+async def register_client(client_info:OAuthClientInformationFull):
+    """Dynamic client registration endpoint (RFC 7591)."""
+    #client_id = f"client_{secrets.token_urlsafe(16)}"
+    #client_secret = secrets.token_urlsafe(32)
+
+    # client_object = {
+    #     "client_id": client_id,
+    #     "client_secret": client_secret,
+    #     "redirect_uris": request.redirect_uris,
+    #     "client_name": request.client_name,
+    #     "grant_types": request.grant_types,
+    #     "response_types": request.response_types,
+    #     "token_endpoint_auth_method": request.token_endpoint_auth_method,
+    #     "client_id_issued_at": int(time.time()),
+    #     "client_secret_expires_at": 0,  # Never expires
+    # }
+    print(f"Mahesh:register_client: {client_info}")
+    clients[client_info.client_id] = client_info
+    logger.info(f"registering client: {client_info}")
+    #return client_info
+
+
+@app.get("/oauth/clients")
+async def get_clients():
+    """Get all clients."""
+    return clients
+
+@app.delete("/oauth/clients")
+async def clear_clients():
+    """Clear all registered clients."""
+    global clients
+    clients.clear()
+    logger.info("All clients have been cleared")
+    return {"message": "All clients have been cleared successfully"}
 
 @app.get("/debug/config")
 async def debug_config():
@@ -58,22 +107,41 @@ class TokenRequest(BaseModel):
     client_id: str
     client_secret: str
     redirect_uri: Optional[str] = None
+    code_verifier: Optional[str] = None  # Add for PKCE
 
 @app.get("/oauth/authorize")
 async def authorize(
     client_id: str,
     redirect_uri: str,
+    code_challenge: str,
+    code_challenge_method: str = "S256",
     state: Optional[str] = None,
     scope: Optional[str] = None
 ):
     logger.info(f"Received authorization request with client_id: {client_id}")
     logger.info(f"Registered clients: {list(clients.keys())}")
-    logger.info(f"Valid client IDs: {[client['client_id'] for client in clients.values()]}")
+    logger.info(f"Valid client IDs: {[client.client_id for client in clients.values()]}")
     
+    # Validate code_challenge_method
+    if code_challenge_method != "S256":
+        raise HTTPException(status_code=400, detail="code_challenge_method must be S256")
+
+    # Store code_challenge with auth code
+    auth_code = secrets.token_urlsafe(32)
+    auth_codes[auth_code] = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": scope,
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+        "expires_at": time.time() + 600
+    }
+
+
     # Validate client and redirect URI
     valid_client = None
     for client in clients.values():
-        if client['client_id'] == client_id:
+        if client.client_id == client_id:
             valid_client = client
             break
     
@@ -83,8 +151,10 @@ async def authorize(
     
     logger.info(f"Valid client: {valid_client}")
     #logger.info(f"Valid client redirect_uris: {valid_client['redirect_uris']}")
+    logger.info(f"Redirect URI: {valid_client.redirect_uris}")
     logger.info(f"Redirect URI: {redirect_uri}")
-    if redirect_uri not in valid_client['redirect_uris']:
+    valid_client.redirect_uris = ["http://localhost:8000/local/callback"]
+    if redirect_uri not in valid_client.redirect_uris:
         logger.error(f"Invalid redirect_uri: {redirect_uri}")
         raise HTTPException(status_code=400, detail="Invalid redirect_uri")
     
@@ -114,16 +184,32 @@ async def authorize(
 async def token(request: TokenRequest):
     print("mahesh inside token")
     print(f"request.grant_type: {request.grant_type}")
-    logger.info(f"Token request received: {request.dict()}")
+    logger.info(f"Token request received: {request.model_dump}")
     global auth_codes
-    
+    # Add code_verifier to TokenRequest model
+    if request.grant_type == "authorization_code":
+        code_data = auth_codes[request.code]
+        
+        # # Verify PKCE
+        # if not request.code_verifier:
+        #     raise HTTPException(status_code=400, detail="code_verifier required")
+        
+        # # Verify code challenge
+        # verifier_hash = base64.urlsafe_b64encode(
+        #     hashlib.sha256(request.code_verifier.encode()).digest()
+        # ).decode().rstrip('=')
+        
+        # if verifier_hash != code_data["code_challenge"]:
+        #     raise HTTPException(status_code=400, detail="Invalid code_verifier")
+            
     # Validate client credentials
     valid_client = None
     for client in clients.values():
-        if client['client_id'] == request.client_id:
+        if client.client_id == request.client_id:
             valid_client = client
             break
-    
+    logger.info(f"valid_client: {valid_client}")
+    logger.info(f"request.client_secret: {request.client_secret}")
     if not valid_client or valid_client['client_secret'] != request.client_secret:
         logger.error(f"Invalid client credentials for client_id: {request.client_id}")
         raise HTTPException(status_code=401, detail="Invalid client credentials")
@@ -203,6 +289,6 @@ if __name__ == "__main__":
     )
     logger.info("Starting OAuth server with registered clients:")
     for client_name, client_data in clients.items():
-        logger.info(f"  {client_name}: {client_data['client_id']}")
+        logger.info(f"  {client_name}: {client_data.client_id}")
     
     uvicorn.run(app, host="localhost", port=9000) 

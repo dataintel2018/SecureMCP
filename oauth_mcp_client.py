@@ -5,12 +5,16 @@ Simple MCP client example with OAuth authentication support.
 This client connects to an MCP server using streamable HTTP transport with OAuth.
 
 """
-
+import json
 import asyncio
 import os
 import threading
 import time
 import webbrowser
+import base64
+import hashlib
+import secrets
+import requests
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
@@ -159,6 +163,9 @@ class SimpleAuthClient:
         """Connect to the MCP server."""
         print(f"🔗 Attempting to connect to {self.server_url}...")
 
+        # Generate PKCE pair
+        code_verifier, code_challenge = self.generate_pkce_pair()        
+
         try:
             #Set up callback server
             callback_server = CallbackServer(port=3000)
@@ -174,16 +181,16 @@ class SimpleAuthClient:
                     print("Mahesh:Stopping callback server")
                     callback_server.stop()
 
-            async def dummy_callback_handler():
-                raise RuntimeError("Client-side callback handler should never be called in server-mediated OAuth flow.")
-
             client_metadata_dict = {
-                "client_name": "Simple Auth Client",
+                "client_name": "Mahesh Auth Client",
                 "redirect_uris": ["http://localhost:3000/callback"],
                 #"redirect_uris": ["http://localhost:8000/local/callback"],
-                "grant_types": ["authorization_code", "refresh_token"],
-                "response_types": ["code"],
-                "token_endpoint_auth_method": "client_secret_post",
+                # "grant_types": ["authorization_code", "refresh_token"],
+                # "response_types": ["code"],
+                # "token_endpoint_auth_method": "client_secret_post",
+                # "code_challenge_methods_supported": ["S256"],
+                #"code_verifier": code_verifier,
+                #"code_challenge": code_challenge                
             }
 
             async def _default_redirect_handler(authorization_url: str) -> None:
@@ -191,6 +198,10 @@ class SimpleAuthClient:
                 print(f"Opening browser for authorization: {authorization_url}")
                 webbrowser.open(authorization_url)
 
+            client_metadata=OAuthClientMetadata.model_validate(
+                client_metadata_dict
+            )
+            print(f"Mahesh In connect client_metadata: {client_metadata.model_dump()}")
             # Create OAuth authentication handler using the new interface
             oauth_auth = OAuthClientProvider(
                 server_url=self.server_url.replace("/mcp", ""),
@@ -284,6 +295,28 @@ class SimpleAuthClient:
         except Exception as e:
             print(f"❌ Failed to call tool '{tool_name}': {e}")
 
+    def generate_pkce_pair(self):
+        """Generate PKCE code verifier and challenge."""
+        code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip('=')
+        code_challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(code_verifier.encode()).digest()
+        ).decode().rstrip('=')
+        return code_verifier, code_challenge
+
+    # async def connect(self):
+    #     # Generate PKCE pair
+    #     code_verifier, code_challenge = self.generate_pkce_pair()
+        
+    #     # Update client metadata to include PKCE
+    #     client_metadata_dict = {
+    #         "client_name": "Simple Auth Client",
+    #         "redirect_uris": ["http://localhost:3000/callback"],
+    #         "grant_types": ["authorization_code"],
+    #         "response_types": ["code"],
+    #         "token_endpoint_auth_method": "client_secret_post",
+    #         "code_challenge_methods_supported": ["S256"]
+    #     }
+
     async def interactive_loop(self):
         """Run interactive command loop."""
         print("\n🎯 Interactive MCP Client")
@@ -339,13 +372,14 @@ class SimpleAuthClient:
                 break
 
 
+
 async def main():
     """Main entry point."""
     # Default server URL - can be overridden with environment variable
     # Most MCP streamable HTTP servers use /mcp as the endpoint
     server_url = os.getenv("MCP_SERVER_PORT", 8000)
-    #transport_type = os.getenv("MCP_TRANSPORT_TYPE", "streamable_http")
-    transport_type = os.getenv("MCP_TRANSPORT_TYPE", "sse")
+    transport_type = os.getenv("MCP_TRANSPORT_TYPE", "streamable_http")
+    #transport_type = os.getenv("MCP_TRANSPORT_TYPE", "sse")
     server_url = (
         f"http://localhost:{server_url}/mcp"
         if transport_type == "streamable_http"
@@ -358,7 +392,42 @@ async def main():
 
     # Start connection flow - OAuth will be handled automatically
     client = SimpleAuthClient(server_url, transport_type)
+    print("Created Client Object")
     await client.connect()
+    print("Connected to MCP Server")
+
+
+def register_client():
+
+    #response = requests.delete(f"http://localhost:9000/oauth/clients")
+    #print(f"Mahesh In cli response: {json.dumps(response.json(), indent=4)}")     
+
+    #Register the client with the OAuth server
+    client_metadata_dict = {
+        "client_name": "First Auth Client",
+        "redirect_uris": ["http://localhost:3000/callback"],
+        "grant_types": ["authorization_code", "refresh_token"],
+    }
+    client_object = OAuthClientInformationFull(
+        client_id = "mahesh_client_id",
+        client_secret = "Mahesh_client_secret",
+        client_id_issued_at = 1718438400,
+        client_secret_expires_at = 1718438400,
+        redirect_uris=["http://localhost:3000/callback"],
+        grant_types=["authorization_code", "refresh_token"],
+        token_endpoint_auth_method="client_secret_post",
+        response_types=["code"],
+        scopes=["user", "profile"]
+        )
+    print(f"Mahesh In cli client_object: {client_object.model_dump_json()}")
+    response = requests.post(f"http://localhost:9000/oauth/register", data=client_object.model_dump_json())
+    print(f"Mahesh In cli response: {response.json()}")
+    print(f"Mahesh In cli response: {response.json()}")
+    print(f"Mahesh In cli response: {response.status_code}")
+
+    #response = requests.get(f"http://localhost:9000/oauth/clients")
+    #print(f"Mahesh In cli response: {json.dumps(response.json(), indent=4)}")     
+
 
 
 def cli():
@@ -367,4 +436,6 @@ def cli():
 
 
 if __name__ == "__main__":
+    #First register this client with the OAuth server
+    #register_client()
     cli()

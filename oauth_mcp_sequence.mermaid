@@ -1,0 +1,83 @@
+sequenceDiagram
+    participant Client as MCP Client<br/>(oauth_mcp_client.py)
+    participant CallbackServer as Callback Server<br/>(localhost:3000)
+    participant MCPServer as MCP Server<br/>(oauth_mcp_server.py:8000)
+    participant OAuthServer as OAuth Server<br/>(LocalOAuthServer.py:9000)
+    participant Browser as User Browser
+
+    Note over Client, Browser: OAuth Authentication Flow Start
+
+    %% Initial Connection Attempt
+    Client->>CallbackServer: Start callback server (port 3000)
+    Client->>MCPServer: Connect with OAuth auth
+    MCPServer->>MCPServer: Create OAuth provider & register client
+    
+    %% OAuth Authorization Flow
+    MCPServer->>MCPServer: Generate state & store mapping
+    MCPServer->>Client: Return authorization URL
+    Note right of MCPServer: URL: http://localhost:9000/oauth/authorize<br/>?client_id=local_client_id<br/>&redirect_uri=http://localhost:8000/local/callback<br/>&scope=user&state={state}
+    
+    Client->>Browser: Open authorization URL in browser
+    Browser->>OAuthServer: GET /oauth/authorize (with params)
+    
+    %% OAuth Server Processing
+    OAuthServer->>OAuthServer: Validate client_id & redirect_uri
+    OAuthServer->>OAuthServer: Generate authorization code
+    OAuthServer->>Browser: Redirect to MCP server callback
+    Note right of OAuthServer: Redirect: http://localhost:8000/local/callback<br/>?code={auth_code}&state={state}
+    
+    %% MCP Server Callback Handling
+    Browser->>MCPServer: GET /local/callback?code={auth_code}&state={state}
+    MCPServer->>MCPServer: Validate state & retrieve mapping
+    MCPServer->>OAuthServer: POST /oauth/token (exchange code for token)
+    Note right of MCPServer: Request: grant_type=authorization_code<br/>client_id, client_secret, code, redirect_uri
+    
+    OAuthServer->>OAuthServer: Validate auth code & credentials
+    OAuthServer->>OAuthServer: Generate access token
+    OAuthServer->>MCPServer: Return access token
+    Note left of OAuthServer: Response: access_token, token_type, expires_in
+    
+    %% MCP Token Generation
+    MCPServer->>MCPServer: Generate MCP authorization code
+    MCPServer->>MCPServer: Store token mapping (MCP ↔ OAuth)
+    MCPServer->>Browser: Redirect to client callback
+    Note right of MCPServer: Redirect: http://localhost:8000/client/callback<br/>?code={mcp_code}&state={state}
+    
+    %% Client Callback Handling
+    Browser->>MCPServer: GET /client/callback?code={mcp_code}&state={state}
+    MCPServer->>MCPServer: Retrieve original redirect URI from state
+    MCPServer->>Browser: Redirect to original client callback
+    Note right of MCPServer: Redirect: http://localhost:3000/callback<br/>?code={mcp_code}&state={state}
+    
+    %% Client Receives Authorization Code
+    Browser->>CallbackServer: GET /callback?code={mcp_code}&state={state}
+    CallbackServer->>CallbackServer: Store authorization code
+    CallbackServer->>Browser: Success page
+    CallbackServer->>Client: Return authorization code & state
+    Client->>CallbackServer: Stop callback server
+    
+    %% Token Exchange
+    Client->>MCPServer: POST /oauth/token (exchange MCP code)
+    MCPServer->>MCPServer: Validate MCP authorization code
+    MCPServer->>MCPServer: Generate MCP access token
+    MCPServer->>MCPServer: Map MCP token to OAuth token
+    MCPServer->>Client: Return MCP access token
+    Note left of MCPServer: Response: access_token (MCP), token_type, expires_in
+    
+    %% Session Initialization
+    Client->>MCPServer: Initialize MCP session with token
+    MCPServer->>MCPServer: Validate MCP token
+    MCPServer->>Client: Session established
+    
+    Note over Client, Browser: Authentication Complete - Ready for MCP Operations
+    
+    %% Example Tool Usage
+    rect rgb(240, 248, 255)
+        Note over Client, OAuthServer: Example: Using Authenticated Tool
+        Client->>MCPServer: Call tool (with MCP token)
+        MCPServer->>MCPServer: Validate MCP token & get OAuth token
+        MCPServer->>OAuthServer: GET /userinfo (with OAuth token)
+        OAuthServer->>OAuthServer: Validate OAuth token
+        OAuthServer->>MCPServer: Return user info
+        MCPServer->>Client: Return tool result
+    end
